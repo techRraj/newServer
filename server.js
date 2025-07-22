@@ -1,12 +1,14 @@
-import express from "express";
+import express from 'express';
+import userRoutes from './routes/userRoutes.js';
+import imageRoutes from './routes/imageRoutes.js';
+import mongoose from 'mongoose';
+import dotenv from 'dotenv';
 import cors from 'cors';
-import 'dotenv/config';
-import connectDB from "./config/mongodb.js";
-import imageRouter from "./routes/imageRoutes.js";
-import userRouter from "./routes/userRoutes.js";
+
+dotenv.config();
 
 const app = express();
-const port = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5000;
 
 // Middleware
 app.use(express.json());
@@ -16,22 +18,31 @@ app.use(cors({
   origin: 'https://tech-rraj-client-repo.vercel.app ',
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'token']
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// Connect DB
-await connectDB();
-
 // Routes
-app.use('/api/user', userRouter);
-app.use('/api/image', imageRouter);
+app.use('/api/user', userRoutes);
+app.use('/api/image', imageRoutes);
 
 // Health check
 app.get('/', (req, res) => {
-  res.send('API Working');
+  res.send('API Running');
 });
 
-// Start server
-app.listen(port, '0.0.0.0', () => {
-  console.log(`Server started on PORT:${port}`);
+// MongoDB connection
+mongoose.connect(process.env.MONGODB_URI, {
+  dbName: "ImageGen",
+  serverSelectionTimeoutMS: 15000,
+  socketTimeoutMS: 45000,
+})
+.then(() => {
+  console.log("Database connected successfully");
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server started on port: ${PORT}`);
+  });
+})
+.catch((err) => {
+  console.error("MongoDB connection failed:", err.message);
+  process.exit(1);
 });
