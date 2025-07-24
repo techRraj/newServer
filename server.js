@@ -15,18 +15,19 @@ app.use(express.json());
 
 // CORS Setup
 app.use(cors({
-  origin: 'https://tech-rraj-client-repo-xwx8.vercel.app',
+  origin: 'https://tech-rraj-client-repo.vercel.app',
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
 // Routes
 app.use('/api/user', userRoutes);
 app.use('/api/image', imageRoutes);
 
 // Health check
 app.get('/', (req, res) => {
-  res.send('API Running');
+  res.send('API Working');
 });
 
 // MongoDB connection
