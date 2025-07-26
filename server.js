@@ -14,8 +14,9 @@ const PORT = process.env.PORT || 5000;
 app.use(express.json());
 
 // CORS Setup
+// In your server.js
 app.use(cors({
-  origin: 'https://tech-rraj-client-repo-xwx8.vercel.app',
+  origin: ['https://tech-rraj-client-repo-xwx8.vercel.app', 'http://localhost:3000'],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'token']
