@@ -7,15 +7,23 @@ import transactionModel from "../models/transactionModel.js";
 import crypto from "crypto";
 
 // Initialize Razorpay
-// const razorpayInstance = new razorpay({
-//   key_id: process.env.RAZORPAY_KEY_ID,
-//   key_secret: process.env.RAZORPAY_KEY_SECRET,
-// });
+const razorpayInstance = new razorpay({
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET
+});
+
+// Utility function to remove sensitive data from user object
+const sanitizeUser = (user) => {
+  const userObj = user.toObject();
+  delete userObj.password;
+  delete userObj.__v;
+  return userObj;
+};
 
 /**
  * Register a new user
  */
-const registerUser = async (req, res) => {
+export const registerUser = async (req, res) => {
   try {
     const { name, email, password } = req.body;
 
@@ -41,7 +49,7 @@ const registerUser = async (req, res) => {
       });
     }
 
-    // Check if user already exists
+    // Check if user exists
     const existingUser = await userModel.findOne({ email });
     if (existingUser) {
       return res.status(400).json({ 
@@ -54,12 +62,12 @@ const registerUser = async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    // Create new user
+    // Create new user with 5 free credits
     const newUser = new userModel({ 
       name, 
       email, 
       password: hashedPassword,
-      creditBalance: 5 // Default credits
+      creditBalance: 5 // Initial free credits
     });
 
     const user = await newUser.save();
@@ -69,18 +77,14 @@ const registerUser = async (req, res) => {
       expiresIn: "1d" 
     });
 
-    // Return response without password
-    const userResponse = user.toObject();
-    delete userResponse.password;
-
     res.status(201).json({
       success: true,
       token,
-      user: userResponse
+      user: sanitizeUser(user)
     });
 
   } catch (error) {
-    console.error("Register Error:", error.message);
+    console.error("Register Error:", error);
     res.status(500).json({ 
       success: false, 
       message: "Registration failed",
@@ -92,7 +96,7 @@ const registerUser = async (req, res) => {
 /**
  * Login user
  */
-const loginUser = async (req, res) => {
+export const loginUser = async (req, res) => {
   try {
     const { email, password } = req.body;
 
@@ -127,18 +131,14 @@ const loginUser = async (req, res) => {
       expiresIn: "1d" 
     });
 
-    // Return response without password
-    const userResponse = user.toObject();
-    delete userResponse.password;
-
     res.status(200).json({
       success: true,
       token,
-      user: userResponse
+      user: sanitizeUser(user)
     });
 
   } catch (error) {
-    console.error("Login Error:", error.message);
+    console.error("Login Error:", error);
     res.status(500).json({ 
       success: false, 
       message: "Login failed",
@@ -148,13 +148,11 @@ const loginUser = async (req, res) => {
 };
 
 /**
- * Get user credits
+ * Get user credits and profile
  */
-const userCredits = async (req, res) => {
+export const getUserProfile = async (req, res) => {
   try {
-    const userId = req.user.id;
-
-    const user = await userModel.findById(userId).select("-password");
+    const user = await userModel.findById(req.user.id).select("-password");
     if (!user) {
       return res.status(404).json({ 
         success: false, 
@@ -164,43 +162,50 @@ const userCredits = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      credits: user.creditBalance,
-      user
+      user: sanitizeUser(user)
     });
 
   } catch (error) {
-    console.error("Credits Error:", error.message);
+    console.error("Profile Error:", error);
     res.status(500).json({ 
       success: false, 
-      message: "Failed to get user credits",
+      message: "Failed to get user profile",
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
 
 /**
- * Initiate Razorpay payment
+ * Create Razorpay order for credit purchase
  */
-const paymentRazorpay = async (req, res) => {
+export const createOrder = async (req, res) => {
   try {
     const { planId } = req.body;
     const userId = req.user.id;
 
-    if (!planId) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Plan ID is required" 
-      });
-    }
-
-    // Define plans
+    // Define credit plans
     const plans = {
-      basic: { name: "Basic", credits: 25, amount: 10 },
-      advanced: { name: "Advanced", credits: 70, amount: 30 },
-      premier: { name: "Premier", credits: 150, amount: 50 }
+      basic: { 
+        name: "Basic", 
+        credits: 25, 
+        amount: 1000, // ₹10 (amount in paise)
+        description: "25 image generations" 
+      },
+      standard: { 
+        name: "Standard", 
+        credits: 70, 
+        amount: 3000, // ₹30
+        description: "70 image generations" 
+      },
+      premium: { 
+        name: "Premium", 
+        credits: 150, 
+        amount: 5000, // ₹50
+        description: "150 image generations" 
+      }
     };
 
-    const selectedPlan = plans[planId.toLowerCase()];
+    const selectedPlan = plans[planId];
     if (!selectedPlan) {
       return res.status(400).json({ 
         success: false, 
@@ -208,80 +213,70 @@ const paymentRazorpay = async (req, res) => {
       });
     }
 
+    // Create Razorpay order
+    const options = {
+      amount: selectedPlan.amount,
+      currency: "INR",
+      receipt: `order_${Date.now()}_${userId}`,
+      payment_capture: 1,
+      notes: {
+        userId: userId.toString(),
+        planId,
+        credits: selectedPlan.credits
+      }
+    };
+
+    const order = await razorpayInstance.orders.create(options);
+
     // Create transaction record
-    const transactionData = {
+    const transaction = new transactionModel({
       userId,
+      orderId: order.id,
       plan: selectedPlan.name,
       amount: selectedPlan.amount,
       credits: selectedPlan.credits,
-      date: Date.now(),
-    };
+      status: 'created'
+    });
+    await transaction.save();
 
-    const newTransaction = await transactionModel.create(transactionData);
-
-    // Create Razorpay order
-    const options = {
-      amount: selectedPlan.amount * 100, // in paise
-      currency: process.env.CURRENCY || "INR",
-      receipt: newTransaction._id.toString(),
-      payment_capture: 1
-    };
-
-    razorpayInstance.orders.create(options, (error, order) => {
-      if (error) {
-        console.error("Razorpay Error:", error);
-        return res.status(400).json({ 
-          success: false, 
-          message: "Payment initialization failed" 
-        });
-      }
-      
-      res.status(200).json({ 
-        success: true, 
-        order,
-        transactionId: newTransaction._id
-      });
+    res.status(200).json({
+      success: true,
+      order,
+      plan: selectedPlan
     });
 
   } catch (error) {
-    console.error("Payment Error:", error.message);
+    console.error("Order Error:", error);
     res.status(500).json({ 
       success: false, 
-      message: "Payment processing failed",
+      message: "Order creation failed",
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
 
 /**
- * Verify Razorpay payment
+ * Verify Razorpay payment and add credits
  */
-const verifyRazorpay = async (req, res) => {
+export const verifyPayment = async (req, res) => {
   try {
-    const { razorpay_order_id, razorpay_payment_id, razorpay_signature, transactionId } = req.body;
-
-    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !transactionId) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Payment verification failed - missing details" 
-      });
-    }
+    const { razorpay_payment_id, razorpay_order_id, razorpay_signature } = req.body;
 
     // Verify signature
     const generatedSignature = crypto
-      .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
       .update(`${razorpay_order_id}|${razorpay_payment_id}`)
-      .digest("hex");
+      .digest('hex');
 
     if (generatedSignature !== razorpay_signature) {
       return res.status(400).json({ 
         success: false, 
-        message: "Payment verification failed - invalid signature" 
+        message: "Invalid payment signature" 
       });
     }
 
     // Find transaction
-    const transaction = await transactionModel.findById(transactionId);
+    const transaction = await transactionModel.findOne({ orderId: razorpay_order_id });
     if (!transaction) {
       return res.status(404).json({ 
         success: false, 
@@ -289,10 +284,11 @@ const verifyRazorpay = async (req, res) => {
       });
     }
 
-    if (transaction.payment) {
+    // Check if already processed
+    if (transaction.status === 'completed') {
       return res.status(400).json({ 
         success: false, 
-        message: "Payment already verified" 
+        message: "Payment already processed" 
       });
     }
 
@@ -301,23 +297,24 @@ const verifyRazorpay = async (req, res) => {
       transaction.userId,
       { $inc: { creditBalance: transaction.credits } },
       { new: true }
-    );
+    ).select("-password");
 
-    // Update transaction status
-    transaction.payment = true;
-    transaction.razorpayOrderId = razorpay_order_id;
-    transaction.razorpayPaymentId = razorpay_payment_id;
-    transaction.razorpaySignature = razorpay_signature;
+    // Update transaction
+    transaction.status = 'completed';
+    transaction.paymentId = razorpay_payment_id;
+    transaction.signature = razorpay_signature;
+    transaction.completedAt = new Date();
     await transaction.save();
 
     res.status(200).json({
       success: true,
       message: "Payment verified successfully",
-      credits: user.creditBalance
+      credits: user.creditBalance,
+      user: sanitizeUser(user)
     });
 
   } catch (error) {
-    console.error("Verification Error:", error.message);
+    console.error("Payment Error:", error);
     res.status(500).json({ 
       success: false, 
       message: "Payment verification failed",
@@ -326,10 +323,35 @@ const verifyRazorpay = async (req, res) => {
   }
 };
 
-export { 
-  registerUser, 
-  loginUser, 
-  userCredits, 
-  paymentRazorpay, 
-  verifyRazorpay 
+/**
+ * Get user's transaction history
+ */
+export const getTransactions = async (req, res) => {
+  try {
+    const transactions = await transactionModel.find({ userId: req.user.id })
+      .sort({ createdAt: -1 })
+      .select("-__v -userId");
+
+    res.status(200).json({
+      success: true,
+      transactions
+    });
+
+  } catch (error) {
+    console.error("Transactions Error:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to get transactions",
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+export default {
+  registerUser,
+  loginUser,
+  getUserProfile,
+  createOrder,
+  verifyPayment,
+  getTransactions
 };
