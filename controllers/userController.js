@@ -20,9 +20,7 @@ const sanitizeUser = (user) => {
   return userObj;
 };
 
-/**
- * Register a new user
- */
+// User Controller Methods
 export const registerUser = async (req, res) => {
   try {
     const { name, email, password } = req.body;
@@ -67,7 +65,7 @@ export const registerUser = async (req, res) => {
       name, 
       email, 
       password: hashedPassword,
-      creditBalance: 5 // Initial free credits
+      creditBalance: 5
     });
 
     const user = await newUser.save();
@@ -93,9 +91,6 @@ export const registerUser = async (req, res) => {
   }
 };
 
-/**
- * Login user
- */
 export const loginUser = async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -147,9 +142,6 @@ export const loginUser = async (req, res) => {
   }
 };
 
-/**
- * Get user credits and profile
- */
 export const getUserProfile = async (req, res) => {
   try {
     const user = await userModel.findById(req.user.id).select("-password");
@@ -175,34 +167,73 @@ export const getUserProfile = async (req, res) => {
   }
 };
 
-/**
- * Create Razorpay order for credit purchase
- */
+export const updateUserProfile = async (req, res) => {
+  try {
+    const { name } = req.body;
+    const user = await userModel.findByIdAndUpdate(
+      req.user.id,
+      { name },
+      { new: true, runValidators: true }
+    ).select("-password");
+
+    res.status(200).json({
+      success: true,
+      user: sanitizeUser(user)
+    });
+  } catch (error) {
+    console.error("Update Profile Error:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: "Profile update failed",
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+export const changePassword = async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    const user = await userModel.findById(req.user.id).select("+password");
+
+    // Verify current password
+    const isMatch = await bcrypt.compare(currentPassword, user.password);
+    if (!isMatch) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Current password is incorrect" 
+      });
+    }
+
+    // Hash new password
+    const salt = await bcrypt.genSalt(10);
+    user.password = await bcrypt.hash(newPassword, salt);
+    user.passwordChangedAt = Date.now();
+    await user.save();
+
+    res.status(200).json({
+      success: true,
+      message: "Password changed successfully"
+    });
+
+  } catch (error) {
+    console.error("Change Password Error:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: "Password change failed",
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
 export const createOrder = async (req, res) => {
   try {
     const { planId } = req.body;
     const userId = req.user.id;
 
-    // Define credit plans
     const plans = {
-      basic: { 
-        name: "Basic", 
-        credits: 25, 
-        amount: 1000, // ₹10 (amount in paise)
-        description: "25 image generations" 
-      },
-      standard: { 
-        name: "Standard", 
-        credits: 70, 
-        amount: 3000, // ₹30
-        description: "70 image generations" 
-      },
-      premium: { 
-        name: "Premium", 
-        credits: 150, 
-        amount: 5000, // ₹50
-        description: "150 image generations" 
-      }
+      basic: { name: "Basic", credits: 25, amount: 1000 },
+      standard: { name: "Standard", credits: 70, amount: 3000 },
+      premium: { name: "Premium", credits: 150, amount: 5000 }
     };
 
     const selectedPlan = plans[planId];
@@ -213,7 +244,6 @@ export const createOrder = async (req, res) => {
       });
     }
 
-    // Create Razorpay order
     const options = {
       amount: selectedPlan.amount,
       currency: "INR",
@@ -227,8 +257,6 @@ export const createOrder = async (req, res) => {
     };
 
     const order = await razorpayInstance.orders.create(options);
-
-    // Create transaction record
     const transaction = new transactionModel({
       userId,
       orderId: order.id,
@@ -255,14 +283,10 @@ export const createOrder = async (req, res) => {
   }
 };
 
-/**
- * Verify Razorpay payment and add credits
- */
 export const verifyPayment = async (req, res) => {
   try {
     const { razorpay_payment_id, razorpay_order_id, razorpay_signature } = req.body;
 
-    // Verify signature
     const generatedSignature = crypto
       .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
       .update(`${razorpay_order_id}|${razorpay_payment_id}`)
@@ -275,7 +299,6 @@ export const verifyPayment = async (req, res) => {
       });
     }
 
-    // Find transaction
     const transaction = await transactionModel.findOne({ orderId: razorpay_order_id });
     if (!transaction) {
       return res.status(404).json({ 
@@ -284,7 +307,6 @@ export const verifyPayment = async (req, res) => {
       });
     }
 
-    // Check if already processed
     if (transaction.status === 'completed') {
       return res.status(400).json({ 
         success: false, 
@@ -292,14 +314,12 @@ export const verifyPayment = async (req, res) => {
       });
     }
 
-    // Update user credits
     const user = await userModel.findByIdAndUpdate(
       transaction.userId,
       { $inc: { creditBalance: transaction.credits } },
       { new: true }
     ).select("-password");
 
-    // Update transaction
     transaction.status = 'completed';
     transaction.paymentId = razorpay_payment_id;
     transaction.signature = razorpay_signature;
@@ -323,9 +343,6 @@ export const verifyPayment = async (req, res) => {
   }
 };
 
-/**
- * Get user's transaction history
- */
 export const getTransactions = async (req, res) => {
   try {
     const transactions = await transactionModel.find({ userId: req.user.id })
@@ -345,13 +362,4 @@ export const getTransactions = async (req, res) => {
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
-};
-
-export default {
-  registerUser,
-  loginUser,
-  getUserProfile,
-  createOrder,
-  verifyPayment,
-  getTransactions
 };
