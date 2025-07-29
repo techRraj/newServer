@@ -7,7 +7,8 @@ import {
   changePassword,
   createOrder,
   verifyPayment,
-  getTransactions
+  getTransactions,
+  getUserCredits
 } from '../controllers/userController.js';
 import authUser from '../middlewares/auth.js';
 import rateLimit from 'express-rate-limit';
@@ -44,6 +45,7 @@ router.put('/profile', asyncHandler(updateUserProfile));
 router.put('/change-password', asyncHandler(changePassword));
 router.post('/create-order', asyncHandler(createOrder));
 router.get('/transactions', asyncHandler(getTransactions));
+router.get('/credits', asyncHandler(getUserCredits));
 
 // CORS Preflight Options
 router.options('*', (req, res) => {

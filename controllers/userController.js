@@ -230,6 +230,13 @@ export const createOrder = async (req, res) => {
     const { planId } = req.body;
     const userId = req.user.id;
 
+    if (!planId) {
+      return res.status(400).json({
+        success: false,
+        message: "Plan ID is required"
+      });
+    }
+
     const plans = {
       basic: { name: "Basic", credits: 25, amount: 1000 },
       standard: { name: "Standard", credits: 70, amount: 3000 },
@@ -238,14 +245,19 @@ export const createOrder = async (req, res) => {
 
     const selectedPlan = plans[planId];
     if (!selectedPlan) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Invalid plan selected" 
+      return res.status(400).json({
+        success: false,
+        message: "Invalid plan selected"
       });
     }
 
+    // Validate Razorpay keys
+    if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
+      throw new Error("Razorpay keys not configured");
+    }
+
     const options = {
-      amount: selectedPlan.amount,
+      amount: selectedPlan.amount * 100, // Convert to paise
       currency: "INR",
       receipt: `order_${Date.now()}_${userId}`,
       payment_capture: 1,
@@ -257,6 +269,8 @@ export const createOrder = async (req, res) => {
     };
 
     const order = await razorpayInstance.orders.create(options);
+    
+    // Save transaction
     const transaction = new transactionModel({
       userId,
       orderId: order.id,
@@ -269,16 +283,19 @@ export const createOrder = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      order,
+      order: {
+        ...order,
+        amount: order.amount / 100 // Convert back to rupees
+      },
       plan: selectedPlan
     });
 
   } catch (error) {
     console.error("Order Error:", error);
-    res.status(500).json({ 
-      success: false, 
-      message: "Order creation failed",
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    res.status(500).json({
+      success: false,
+      message: "Order creation failed: " + error.message,
+      error: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 };
@@ -359,6 +376,23 @@ export const getTransactions = async (req, res) => {
     res.status(500).json({ 
       success: false, 
       message: "Failed to get transactions",
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+export const getUserCredits = async (req, res) => {
+  try {
+    const user = await userModel.findById(req.user.id).select('creditBalance');
+    res.status(200).json({
+      success: true,
+      credits: user.creditBalance
+    });
+  } catch (error) {
+    console.error("Get Credits Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to get credits",
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
