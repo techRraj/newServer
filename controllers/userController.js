@@ -428,13 +428,14 @@ export const createOrder = async (req, res) => {
       });
     }
 
-    const plans = {
+    // Define plans with proper validation
+    const availablePlans = {
       basic: { name: "Basic", credits: 25, amount: 1000 },
       standard: { name: "Standard", credits: 70, amount: 3000 },
       premium: { name: "Premium", credits: 150, amount: 5000 }
     };
 
-    const selectedPlan = plans[planId];
+    const selectedPlan = availablePlans[planId];
     if (!selectedPlan) {
       return res.status(400).json({
         success: false,
@@ -443,12 +444,14 @@ export const createOrder = async (req, res) => {
       });
     }
 
-    // Validate Razorpay keys
+    // Validate Razorpay configuration
     if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
-      throw new Error("Razorpay keys not configured");
+      console.error("Razorpay keys not configured");
+      throw new Error("Payment gateway configuration error");
     }
 
-    const options = {
+    // Create order options
+    const orderOptions = {
       amount: selectedPlan.amount * 100, // Convert to paise
       currency: "INR",
       receipt: `order_${Date.now()}_${userId}`,
@@ -460,9 +463,13 @@ export const createOrder = async (req, res) => {
       }
     };
 
-    const order = await razorpayInstance.orders.create(options);
+    console.log("Creating Razorpay order with options:", orderOptions);
     
-    // Save transaction
+    // Create Razorpay order
+    const order = await razorpayInstance.orders.create(orderOptions);
+    console.log("Order created successfully:", order);
+
+    // Save transaction record
     const transaction = new transactionModel({
       userId,
       orderId: order.id,
@@ -471,8 +478,10 @@ export const createOrder = async (req, res) => {
       credits: selectedPlan.credits,
       status: 'created'
     });
+
     await transaction.save();
 
+    // Return success response with order details
     res.status(200).json({
       success: true,
       order: {
@@ -483,12 +492,21 @@ export const createOrder = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("Order Error:", error);
+    console.error("Detailed Order Error:", {
+      message: error.message,
+      stack: error.stack,
+      response: error.response?.data,
+      config: error.config
+    });
+    
     res.status(500).json({
       success: false,
       message: "Order creation failed",
       code: "ORDER_FAILED",
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: process.env.NODE_ENV === 'development' ? {
+        message: error.message,
+        stack: error.stack
+      } : undefined
     });
   }
 };
