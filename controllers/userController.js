@@ -76,18 +76,12 @@ export const registerUser = async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    // Create verification token
-    const verificationToken = generateToken();
-    const verificationExpires = Date.now() + 3600000; // 1 hour
-
-    // Create new user with 5 free credits
+    // Create new user with 5 free credits (no verification fields)
     const newUser = new userModel({ 
       name, 
       email, 
       password: hashedPassword,
-      creditBalance: 5,
-      verificationToken,
-      verificationExpires
+      creditBalance: 5
     });
 
     const user = await newUser.save();
@@ -97,11 +91,19 @@ export const registerUser = async (req, res) => {
       expiresIn: "1d" 
     });
 
+    // Set cookie if using cookies
+    res.cookie('token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 24 * 60 * 60 * 1000 // 1 day
+    });
+
     res.status(201).json({
       success: true,
       token,
       user: sanitizeUser(user),
-      message: "Registration successful! Please verify your email."
+      message: "Registration successful!"
     });
 
   } catch (error) {
@@ -138,15 +140,6 @@ export const loginUser = async (req, res) => {
       });
     }
 
-    // Check if email is verified
-    if (!user.isVerified) {
-      return res.status(403).json({
-        success: false,
-        message: "Please verify your email first",
-        code: "EMAIL_NOT_VERIFIED"
-      });
-    }
-
     // Verify password
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
@@ -173,7 +166,8 @@ export const loginUser = async (req, res) => {
     res.status(200).json({
       success: true,
       token,
-      user: sanitizeUser(user)
+      user: sanitizeUser(user),
+      message: "Login successful"
     });
 
   } catch (error) {
