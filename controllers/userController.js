@@ -419,6 +419,7 @@ export const createOrder = async (req, res) => {
   try {
     // Validate authentication
     if (!req.user || !req.user.id) {
+      console.error('Authentication failed - no user in request');
       return res.status(401).json({
         success: false,
         message: "Authentication required",
@@ -429,6 +430,8 @@ export const createOrder = async (req, res) => {
     const { planId } = req.body;
     const userId = req.user.id;
 
+    console.log(`Creating order for user ${userId} with plan ${planId}`);
+
     if (!planId) {
       return res.status(400).json({
         success: false,
@@ -437,7 +440,7 @@ export const createOrder = async (req, res) => {
       });
     }
 
-    // Define plans with proper validation
+    // Define available plans
     const availablePlans = {
       basic: { name: "Basic", credits: 25, amount: 1000 },
       standard: { name: "Standard", credits: 70, amount: 3000 },
@@ -455,7 +458,7 @@ export const createOrder = async (req, res) => {
 
     // Validate Razorpay configuration
     if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
-      console.error("Razorpay keys not configured");
+      console.error('Razorpay keys not configured');
       return res.status(500).json({
         success: false,
         message: "Payment gateway configuration error",
@@ -463,9 +466,9 @@ export const createOrder = async (req, res) => {
       });
     }
 
-    // Initialize Razorpay if not already done
+    // Reinitialize Razorpay if needed
     if (!razorpayInstance) {
-      razorpayInstance = new razorpay({
+      razorpayInstance = new Razorpay({
         key_id: process.env.RAZORPAY_KEY_ID,
         key_secret: process.env.RAZORPAY_KEY_SECRET
       });
@@ -484,8 +487,11 @@ export const createOrder = async (req, res) => {
       }
     };
 
+    console.log('Creating Razorpay order with options:', orderOptions);
+
     // Create Razorpay order
     const order = await razorpayInstance.orders.create(orderOptions);
+    console.log('Order created successfully:', order.id);
 
     // Save transaction record
     const transaction = new transactionModel({
@@ -498,9 +504,10 @@ export const createOrder = async (req, res) => {
     });
 
     await transaction.save();
+    console.log('Transaction record saved:', transaction._id);
 
-    // Return success response with order details
-    res.status(200).json({
+    // Return success response
+    return res.status(200).json({
       success: true,
       order: {
         ...order,
@@ -510,14 +517,22 @@ export const createOrder = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("Order Creation Error:", {
+    console.error('Order Creation Error:', {
       message: error.message,
       stack: error.stack,
-      response: error.response?.data,
-      config: error.config
+      response: error.response?.data
     });
-    
-    res.status(500).json({
+
+    // Specific error handling for Razorpay
+    if (error.error && error.error.description) {
+      return res.status(400).json({
+        success: false,
+        message: `Payment gateway error: ${error.error.description}`,
+        code: "RAZORPAY_ERROR"
+      });
+    }
+
+    return res.status(500).json({
       success: false,
       message: "Order creation failed",
       code: "ORDER_FAILED",
