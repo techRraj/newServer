@@ -417,6 +417,15 @@ export const changePassword = async (req, res) => {
 
 export const createOrder = async (req, res) => {
   try {
+    // Validate authentication
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required",
+        code: "UNAUTHORIZED"
+      });
+    }
+
     const { planId } = req.body;
     const userId = req.user.id;
 
@@ -447,7 +456,19 @@ export const createOrder = async (req, res) => {
     // Validate Razorpay configuration
     if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
       console.error("Razorpay keys not configured");
-      throw new Error("Payment gateway configuration error");
+      return res.status(500).json({
+        success: false,
+        message: "Payment gateway configuration error",
+        code: "PAYMENT_GATEWAY_ERROR"
+      });
+    }
+
+    // Initialize Razorpay if not already done
+    if (!razorpayInstance) {
+      razorpayInstance = new razorpay({
+        key_id: process.env.RAZORPAY_KEY_ID,
+        key_secret: process.env.RAZORPAY_KEY_SECRET
+      });
     }
 
     // Create order options
@@ -463,11 +484,8 @@ export const createOrder = async (req, res) => {
       }
     };
 
-    console.log("Creating Razorpay order with options:", orderOptions);
-    
     // Create Razorpay order
     const order = await razorpayInstance.orders.create(orderOptions);
-    console.log("Order created successfully:", order);
 
     // Save transaction record
     const transaction = new transactionModel({
@@ -492,7 +510,7 @@ export const createOrder = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("Detailed Order Error:", {
+    console.error("Order Creation Error:", {
       message: error.message,
       stack: error.stack,
       response: error.response?.data,
@@ -503,10 +521,7 @@ export const createOrder = async (req, res) => {
       success: false,
       message: "Order creation failed",
       code: "ORDER_FAILED",
-      error: process.env.NODE_ENV === 'development' ? {
-        message: error.message,
-        stack: error.stack
-      } : undefined
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
