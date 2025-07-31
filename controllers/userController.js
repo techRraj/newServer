@@ -12,6 +12,9 @@ const razorpayInstance = new razorpay({
   key_secret: process.env.RAZORPAY_KEY_SECRET
 });
 
+
+ 
+
 // Password requirements
 const PASSWORD_REGEX = /^(?=.*\d)(?=.*[a-z])(?=.*[A-Z])(?=.*[a-zA-Z]).{8,}$/;
 
@@ -522,6 +525,7 @@ export const verifyPayment = async (req, res) => {
   try {
     const { razorpay_payment_id, razorpay_order_id, razorpay_signature } = req.body;
 
+    // 1. Validate the payment signature
     const generatedSignature = crypto
       .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
       .update(`${razorpay_order_id}|${razorpay_payment_id}`)
@@ -535,6 +539,7 @@ export const verifyPayment = async (req, res) => {
       });
     }
 
+    // 2. Find the transaction record
     const transaction = await transactionModel.findOne({ orderId: razorpay_order_id });
     if (!transaction) {
       return res.status(404).json({ 
@@ -544,6 +549,7 @@ export const verifyPayment = async (req, res) => {
       });
     }
 
+    // 3. Check if payment was already processed
     if (transaction.status === 'completed') {
       return res.status(400).json({ 
         success: false, 
@@ -552,27 +558,35 @@ export const verifyPayment = async (req, res) => {
       });
     }
 
+    // 4. Update user's credit balance
     const user = await userModel.findByIdAndUpdate(
       transaction.userId,
       { $inc: { creditBalance: transaction.credits } },
       { new: true }
     ).select("-password");
 
+    // 5. Update transaction status
     transaction.status = 'completed';
     transaction.paymentId = razorpay_payment_id;
     transaction.signature = razorpay_signature;
     transaction.completedAt = new Date();
     await transaction.save();
 
+    // 6. Return success response
     res.status(200).json({
       success: true,
       message: "Payment verified successfully",
       credits: user.creditBalance,
-      user: sanitizeUser(user)
+      user: {
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        creditBalance: user.creditBalance
+      }
     });
 
   } catch (error) {
-    console.error("Payment Error:", error);
+    console.error("Payment Verification Error:", error);
     res.status(500).json({ 
       success: false, 
       message: "Payment verification failed",
