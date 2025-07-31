@@ -419,7 +419,6 @@ export const createOrder = async (req, res) => {
   try {
     // Validate authentication
     if (!req.user || !req.user.id) {
-      console.error('Authentication failed - no user in request');
       return res.status(401).json({
         success: false,
         message: "Authentication required",
@@ -429,8 +428,6 @@ export const createOrder = async (req, res) => {
 
     const { planId } = req.body;
     const userId = req.user.id;
-
-    console.log(`Creating order for user ${userId} with plan ${planId}`);
 
     if (!planId) {
       return res.status(400).json({
@@ -456,42 +453,27 @@ export const createOrder = async (req, res) => {
       });
     }
 
-    // Validate Razorpay configuration
-    if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
-      console.error('Razorpay keys not configured');
-      return res.status(500).json({
-        success: false,
-        message: "Payment gateway configuration error",
-        code: "PAYMENT_GATEWAY_ERROR"
-      });
-    }
-
-    // Reinitialize Razorpay if needed
-    if (!razorpayInstance) {
-      razorpayInstance = new Razorpay({
-        key_id: process.env.RAZORPAY_KEY_ID,
-        key_secret: process.env.RAZORPAY_KEY_SECRET
-      });
-    }
+    // Generate receipt ID that's guaranteed to be <= 40 chars
+    const timestamp = Date.now().toString().slice(-6);
+    const userPart = userId.toString().slice(-4);
+    const receipt = `ord_${timestamp}_${userPart}`.slice(0, 40);
 
     // Create order options
     const orderOptions = {
       amount: selectedPlan.amount * 100, // Convert to paise
       currency: "INR",
-      receipt: `order_${Date.now()}_${userId}`,
+      receipt: receipt,
       payment_capture: 1,
       notes: {
         userId: userId.toString(),
         planId,
-        credits: selectedPlan.credits
+        credits: selectedPlan.credits,
+        fullReceipt: `order_${Date.now()}_${userId}` // Store original receipt
       }
     };
 
-    console.log('Creating Razorpay order with options:', orderOptions);
-
     // Create Razorpay order
     const order = await razorpayInstance.orders.create(orderOptions);
-    console.log('Order created successfully:', order.id);
 
     // Save transaction record
     const transaction = new transactionModel({
@@ -500,13 +482,12 @@ export const createOrder = async (req, res) => {
       plan: selectedPlan.name,
       amount: selectedPlan.amount,
       credits: selectedPlan.credits,
-      status: 'created'
+      status: 'created',
+      receipt: orderOptions.notes.fullReceipt
     });
 
     await transaction.save();
-    console.log('Transaction record saved:', transaction._id);
 
-    // Return success response
     return res.status(200).json({
       success: true,
       order: {
@@ -517,13 +498,9 @@ export const createOrder = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Order Creation Error:', {
-      message: error.message,
-      stack: error.stack,
-      response: error.response?.data
-    });
+    console.error('Order Creation Error:', error);
 
-    // Specific error handling for Razorpay
+    // Handle Razorpay-specific errors
     if (error.error && error.error.description) {
       return res.status(400).json({
         success: false,
