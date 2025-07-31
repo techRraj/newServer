@@ -12,9 +12,6 @@ const razorpayInstance = new razorpay({
   key_secret: process.env.RAZORPAY_KEY_SECRET
 });
 
-
- 
-
 // Password requirements
 const PASSWORD_REGEX = /^(?=.*\d)(?=.*[a-z])(?=.*[A-Z])(?=.*[a-zA-Z]).{8,}$/;
 
@@ -525,33 +522,12 @@ export const verifyPayment = async (req, res) => {
   try {
     const { razorpay_payment_id, razorpay_order_id, razorpay_signature } = req.body;
 
-    // Validate all required fields exist
-    if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Missing payment verification data",
-        code: "MISSING_VERIFICATION_DATA"
-      });
-    }
-
-    // Create the expected signature
-    const expectedSignature = crypto
+    const generatedSignature = crypto
       .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
       .update(`${razorpay_order_id}|${razorpay_payment_id}`)
       .digest('hex');
 
-    // Secure comparison to prevent timing attacks
-    const signatureValid = crypto.timingSafeEqual(
-      Buffer.from(expectedSignature),
-      Buffer.from(razorpay_signature)
-    );
-
-    if (!signatureValid) {
-      console.error('Signature validation failed', {
-        expected: expectedSignature,
-        received: razorpay_signature,
-        orderId: razorpay_order_id
-      });
+    if (generatedSignature !== razorpay_signature) {
       return res.status(400).json({ 
         success: false, 
         message: "Invalid payment signature",
@@ -559,13 +535,49 @@ export const verifyPayment = async (req, res) => {
       });
     }
 
-    // Rest of your verification logic...
+    const transaction = await transactionModel.findOne({ orderId: razorpay_order_id });
+    if (!transaction) {
+      return res.status(404).json({ 
+        success: false, 
+        message: "Transaction not found",
+        code: "TRANSACTION_NOT_FOUND"
+      });
+    }
+
+    if (transaction.status === 'completed') {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Payment already processed",
+        code: "DUPLICATE_PAYMENT"
+      });
+    }
+
+    const user = await userModel.findByIdAndUpdate(
+      transaction.userId,
+      { $inc: { creditBalance: transaction.credits } },
+      { new: true }
+    ).select("-password");
+
+    transaction.status = 'completed';
+    transaction.paymentId = razorpay_payment_id;
+    transaction.signature = razorpay_signature;
+    transaction.completedAt = new Date();
+    await transaction.save();
+
+    res.status(200).json({
+      success: true,
+      message: "Payment verified successfully",
+      credits: user.creditBalance,
+      user: sanitizeUser(user)
+    });
+
   } catch (error) {
-    console.error("Payment Verification Error:", error);
+    console.error("Payment Error:", error);
     res.status(500).json({ 
       success: false, 
       message: "Payment verification failed",
-      code: "PAYMENT_VERIFICATION_FAILED"
+      code: "PAYMENT_VERIFICATION_FAILED",
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
