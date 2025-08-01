@@ -4,7 +4,9 @@ const userSchema = new mongoose.Schema({
   name: { 
     type: String, 
     required: [true, 'Name is required'],
-    trim: true
+    trim: true,
+    minlength: 2,
+    maxlength: 50
   },
   email: { 
     type: String, 
@@ -36,7 +38,8 @@ const userSchema = new mongoose.Schema({
   transactions: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Transaction'
-  }]
+  }],
+  lastLogin: Date
 }, {
   timestamps: true,
   toJSON: {
@@ -46,11 +49,17 @@ const userSchema = new mongoose.Schema({
       delete ret.__v;
       return ret;
     }
+  },
+  toObject: {
+    virtuals: true,
+    transform: (doc, ret) => {
+      delete ret.password;
+      delete ret.__v;
+      return ret;
+    }
   }
 });
 
-// Indexes
-userSchema.index({ email: 1 }, { unique: true });
-
+// Remove the duplicate index since we already have unique: true on the email field
 const userModel = mongoose.models.user || mongoose.model('user', userSchema);
 export default userModel;
