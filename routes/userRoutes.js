@@ -13,7 +13,7 @@ import {
 } from '../controllers/userController.js';
 import authUser from '../middlewares/auth.js';
 import rateLimit from 'express-rate-limit';
-import { body } from 'express-validator';
+
 const router = express.Router();
 
 // Rate limiting for auth routes
@@ -37,14 +37,7 @@ const asyncHandler = (fn) => async (req, res, next) => {
 router.post('/register', authLimiter, asyncHandler(registerUser));
 router.post('/login', authLimiter, asyncHandler(loginUser));
 router.post('/verify-payment', asyncHandler(verifyPayment));
-router.post(
-  '/create-order',
-  [
-    body('planId').isString().notEmpty().withMessage('Valid planId required'),
-    // Add other validations as needed
-  ],
-  userController.createOrder
-);
+
 // Protected routes (require authentication)
 router.use(authUser);
 
