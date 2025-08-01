@@ -114,7 +114,7 @@ app.use(cookieParser(process.env.COOKIE_SECRET || 'default-secret', {
   maxAge: 86400000
 }));
 
-// Robust Rate Limiting
+// Fixed Rate Limiting with proper IPv6 handling
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 300,
@@ -122,8 +122,16 @@ const limiter = rateLimit({
   legacyHeaders: false,
   keyGenerator: (req) => {
     try {
+      // Properly handle IPv6 addresses
       const forwarded = req.headers['x-forwarded-for'];
-      const ip = forwarded ? forwarded.split(/\s*,\s*/)[0] : req.ip;
+      const ip = forwarded 
+        ? forwarded.split(/\s*,\s*/)[0] 
+        : req.socket.remoteAddress;
+      
+      // Normalize IPv6 addresses
+      if (ip.includes('::')) {
+        return ip.split(':').slice(0, 4).join(':') + '::/64';
+      }
       return ip || 'unknown-ip';
     } catch (err) {
       console.error('Rate limit key generation failed:', err);
@@ -387,7 +395,11 @@ const startServer = async () => {
        🚀 Server running in ${NODE_ENV} mode
        🔗 http://localhost:${PORT}
        ⏰ ${new Date().toLocaleString()}
-       ✅ Allowed Origins: ${corsOptions.origin.join(', ')}
+       ✅ Allowed Origins: ${[
+         'https://tech-rraj-client-repo-xwx8.vercel.app',
+         'http://localhost:3000',
+         ...(NODE_ENV === 'development' ? ['http://localhost:5000'] : [])
+       ].join(', ')}
       ==================================
       `);
     });
