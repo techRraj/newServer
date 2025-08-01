@@ -3,14 +3,21 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import validator from "validator";
 import razorpay from "razorpay";
-import transactionModel from "../models/transactionModel.js";
+import Transaction from "../models/transactionModel.js";
 import crypto from "crypto";
+import mongoose from 'mongoose';
 
 // Initialize Razorpay
 const razorpayInstance = new razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
   key_secret: process.env.RAZORPAY_KEY_SECRET
 });
+
+// After initializing razorpayInstance, add:
+if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
+  console.error('Razorpay keys not configured');
+  process.exit(1);
+}
 
 // Password requirements
 const PASSWORD_REGEX = /^(?=.*\d)(?=.*[a-z])(?=.*[A-Z])(?=.*[a-zA-Z]).{8,}$/;
@@ -417,6 +424,7 @@ export const changePassword = async (req, res) => {
 
 export const createOrder = async (req, res) => {
   try {
+    // Authentication check
     if (!req.user?.id) {
       return res.status(401).json({
         success: false,
@@ -428,6 +436,7 @@ export const createOrder = async (req, res) => {
     const { planId } = req.body;
     const userId = req.user.id;
 
+    // Input validation
     if (!planId) {
       return res.status(400).json({
         success: false,
@@ -436,6 +445,7 @@ export const createOrder = async (req, res) => {
       });
     }
 
+    // Define plans
     const PLANS = {
       basic: { name: "Basic Plan", credits: 25, amount: 1000 },
       standard: { name: "Standard Plan", credits: 70, amount: 3000 },
@@ -451,24 +461,18 @@ export const createOrder = async (req, res) => {
       });
     }
 
-    // Create transaction without orderId initially
-    // In your createOrder controller:
-const transaction = new Transaction({
-  userId,
-  plan: selectedPlan.name,
-  amount: selectedPlan.amount,
-  credits: selectedPlan.credits,
-  status: 'pending'
-  // orderId will be added later
-});
-
-// After creating Razorpay order:
-transaction.orderId = razorpayOrder.id;
-await transaction.save();
+    // Create transaction record (without orderId initially)
+    const transaction = await Transaction.create({
+      userId,
+      plan: selectedPlan.name,
+      amount: selectedPlan.amount,
+      credits: selectedPlan.credits,
+      status: 'pending'
+    });
 
     // Create Razorpay order
     const orderOptions = {
-      amount: selectedPlan.amount * 100,
+      amount: selectedPlan.amount * 100, // in paise
       currency: "INR",
       receipt: `txn_${transaction._id}`,
       payment_capture: 1,
@@ -482,7 +486,7 @@ await transaction.save();
 
     const razorpayOrder = await razorpayInstance.orders.create(orderOptions);
 
-    // Update transaction with orderId
+    // Update transaction with Razorpay details
     transaction.orderId = razorpayOrder.id;
     transaction.razorpayOrder = razorpayOrder;
     transaction.status = 'created';
@@ -504,11 +508,10 @@ await transaction.save();
     console.error('Order Creation Error:', {
       error: error.message,
       stack: error.stack,
-      response: error.response?.data,
       planId: req.body?.planId,
       userId: req.user?.id
     });
-    
+
     let errorMessage = "Order creation failed";
     let statusCode = 500;
     
@@ -529,9 +532,9 @@ await transaction.save();
   }
 };
 
+// Update the verifyPayment function completely:
 export const verifyPayment = async (req, res) => {
   try {
-    // Verify authentication
     if (!req.user?.id) {
       return res.status(401).json({
         success: false,
@@ -542,7 +545,6 @@ export const verifyPayment = async (req, res) => {
 
     const { razorpay_payment_id, razorpay_order_id, razorpay_signature } = req.body;
 
-    // Validate input
     if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature) {
       return res.status(400).json({
         success: false,
@@ -551,7 +553,7 @@ export const verifyPayment = async (req, res) => {
       });
     }
 
-    // Verify signature
+    // Signature verification
     const generatedSignature = crypto
       .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
       .update(`${razorpay_order_id}|${razorpay_payment_id}`)
@@ -561,44 +563,33 @@ export const verifyPayment = async (req, res) => {
       return res.status(400).json({ 
         success: false, 
         message: "Invalid payment signature",
-        code: "INVALID_SIGNATURE",
-        debug: {
-          received: razorpay_signature,
-          generated: generatedSignature
-        }
+        code: "INVALID_SIGNATURE"
       });
     }
 
-    // Find transaction with proper error handling
-    const transaction = await transactionModel.findOneAndUpdate(
-      { orderId: razorpay_order_id },
-      { $set: { status: 'completed' } },
+    // Find and update transaction
+    const transaction = await Transaction.findOneAndUpdate(
+      { orderId: razorpay_order_id, status: 'created' },
+      { 
+        $set: { 
+          status: 'completed',
+          paymentId: razorpay_payment_id,
+          signature: razorpay_signature,
+          completedAt: new Date()
+        } 
+      },
       { new: true }
     );
 
     if (!transaction) {
-      // Log all pending transactions for debugging
-      const pendingTransactions = await transactionModel.find({
-        status: 'created'
-      }).select('orderId userId createdAt');
-      
-      console.error('Transaction not found:', {
-        razorpay_order_id,
-        pendingTransactions
-      });
-
       return res.status(404).json({ 
         success: false, 
-        message: "Transaction not found",
-        code: "TRANSACTION_NOT_FOUND",
-        debug: {
-          razorpay_order_id,
-          pendingTransactions
-        }
+        message: "Transaction not found or already processed",
+        code: "TRANSACTION_NOT_FOUND"
       });
     }
 
-    // Verify user exists
+    // Update user credits
     const user = await userModel.findByIdAndUpdate(
       transaction.userId,
       { $inc: { creditBalance: transaction.credits } },
@@ -606,18 +597,17 @@ export const verifyPayment = async (req, res) => {
     ).select('-password -__v');
 
     if (!user) {
+      // Rollback transaction status if user not found
+      await Transaction.findByIdAndUpdate(transaction._id, {
+        status: 'failed',
+        error: 'User not found'
+      });
       return res.status(404).json({
         success: false,
         message: "User account not found",
         code: "USER_NOT_FOUND"
       });
     }
-
-    // Finalize transaction update
-    transaction.paymentId = razorpay_payment_id;
-    transaction.signature = razorpay_signature;
-    transaction.completedAt = new Date();
-    await transaction.save();
 
     return res.status(200).json({
       success: true,
@@ -634,7 +624,6 @@ export const verifyPayment = async (req, res) => {
   } catch (error) {
     console.error("Payment Verification Error:", error);
     
-    // Handle duplicate payments
     if (error.message.includes('duplicate key')) {
       return res.status(400).json({
         success: false,
@@ -697,4 +686,22 @@ export const getUserCredits = async (req, res) => {
       code: "CREDITS_FETCH_FAILED"
     });
   }
+};
+
+// Add to your userController.js
+export const handleWebhook = async (req, res) => {
+  const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
+  const webhookSignature = req.headers['x-razorpay-signature'];
+  
+  const isValid = crypto
+    .createHmac('sha256', webhookSecret)
+    .update(JSON.stringify(req.body))
+    .digest('hex');
+
+  if (isValid !== webhookSignature) {
+    return res.status(400).json({ success: false });
+  }
+
+  // Process webhook events
+  // ...
 };
