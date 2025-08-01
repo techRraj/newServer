@@ -81,7 +81,7 @@ const corsOptions = {
 };
 
 // Trust proxy with proper IP handling
-app.set('trust proxy', true);
+app.set('trust proxy', 1);
 
 // ======================
 // SECURITY MIDDLEWARE
@@ -129,9 +129,7 @@ const limiter = rateLimit({
         : req.socket.remoteAddress;
       
       // Normalize IPv6 addresses
-      if (ip.includes('::')) {
-        return ip.split(':').slice(0, 4).join(':') + '::/64';
-      }
+     
       return ip || 'unknown-ip';
     } catch (err) {
       console.error('Rate limit key generation failed:', err);

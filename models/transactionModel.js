@@ -8,7 +8,7 @@ const transactionSchema = new mongoose.Schema({
   },
   orderId: {
     type: String,
-    required: true,
+    required: false, // Changed from true to false initially
     unique: true
   },
   plan: {
@@ -34,9 +34,16 @@ const transactionSchema = new mongoose.Schema({
 }, {
   timestamps: true
 });
-// Ensure this is in your transaction model
-transactionSchema.index({ orderId: 1 }, { unique: true });
-const transactionModel = mongoose.models.transaction || 
-  mongoose.model("transaction", transactionSchema);
 
-export default transactionModel;
+// Remove the separate index() call since we already have unique: true in schema
+// transactionSchema.index({ orderId: 1 }, { unique: true }); // REMOVE THIS LINE
+
+// Safe model registration
+let Transaction;
+if (mongoose.models.Transaction) {
+  Transaction = mongoose.model('Transaction');
+} else {
+  Transaction = mongoose.model('Transaction', transactionSchema);
+}
+
+export default Transaction;

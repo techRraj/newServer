@@ -417,7 +417,6 @@ export const changePassword = async (req, res) => {
 
 export const createOrder = async (req, res) => {
   try {
-    // Validate authentication
     if (!req.user?.id) {
       return res.status(401).json({
         success: false,
@@ -429,7 +428,6 @@ export const createOrder = async (req, res) => {
     const { planId } = req.body;
     const userId = req.user.id;
 
-    // Validate input
     if (!planId) {
       return res.status(400).json({
         success: false,
@@ -438,11 +436,10 @@ export const createOrder = async (req, res) => {
       });
     }
 
-    // Define available plans
     const PLANS = {
-      basic: { name: "Basic", credits: 25, amount: 1000 },
-      standard: { name: "Standard", credits: 70, amount: 3000 },
-      premium: { name: "Premium", credits: 150, amount: 5000 }
+      basic: { name: "Basic Plan", credits: 25, amount: 1000 },
+      standard: { name: "Standard Plan", credits: 70, amount: 3000 },
+      premium: { name: "Premium Plan", credits: 150, amount: 5000 }
     };
 
     const selectedPlan = PLANS[planId];
@@ -454,19 +451,24 @@ export const createOrder = async (req, res) => {
       });
     }
 
-    // Create transaction record first
-    const transaction = new transactionModel({
-      userId,
-      plan: selectedPlan.name,
-      amount: selectedPlan.amount,
-      credits: selectedPlan.credits,
-      status: 'pending'
-    });
-    await transaction.save();
+    // Create transaction without orderId initially
+    // In your createOrder controller:
+const transaction = new Transaction({
+  userId,
+  plan: selectedPlan.name,
+  amount: selectedPlan.amount,
+  credits: selectedPlan.credits,
+  status: 'pending'
+  // orderId will be added later
+});
+
+// After creating Razorpay order:
+transaction.orderId = razorpayOrder.id;
+await transaction.save();
 
     // Create Razorpay order
     const orderOptions = {
-      amount: selectedPlan.amount * 100, // in paise
+      amount: selectedPlan.amount * 100,
       currency: "INR",
       receipt: `txn_${transaction._id}`,
       payment_capture: 1,
@@ -478,10 +480,9 @@ export const createOrder = async (req, res) => {
       }
     };
 
-    console.log('Creating Razorpay order with options:', orderOptions);
     const razorpayOrder = await razorpayInstance.orders.create(orderOptions);
 
-    // Update transaction with Razorpay details
+    // Update transaction with orderId
     transaction.orderId = razorpayOrder.id;
     transaction.razorpayOrder = razorpayOrder;
     transaction.status = 'created';
@@ -491,41 +492,39 @@ export const createOrder = async (req, res) => {
       success: true,
       order: {
         id: razorpayOrder.id,
-        amount: razorpayOrder.amount / 100, // convert to rupees
+        amount: razorpayOrder.amount,
         currency: razorpayOrder.currency,
         receipt: razorpayOrder.receipt
       },
+      plan: selectedPlan,
       transactionId: transaction._id
     });
 
   } catch (error) {
-    console.error('Order Creation Error:', error);
+    console.error('Order Creation Error:', {
+      error: error.message,
+      stack: error.stack,
+      response: error.response?.data,
+      planId: req.body?.planId,
+      userId: req.user?.id
+    });
     
-    // Handle Razorpay-specific errors
+    let errorMessage = "Order creation failed";
+    let statusCode = 500;
+    
     if (error.error?.description) {
-      return res.status(400).json({
-        success: false,
-        message: `Payment gateway error: ${error.error.description}`,
-        code: "RAZORPAY_ERROR",
-        details: process.env.NODE_ENV === 'development' ? error : undefined
-      });
-    }
-    
-    // Handle database errors
-    if (error.name === 'MongoError' && error.code === 11000) {
-      return res.status(400).json({
-        success: false,
-        message: "Duplicate transaction detected",
-        code: "DUPLICATE_TRANSACTION"
-      });
+      errorMessage = `Payment gateway error: ${error.error.description}`;
+      statusCode = 400;
+    } else if (error.name === 'MongoError' && error.code === 11000) {
+      errorMessage = "Duplicate transaction detected";
+      statusCode = 400;
     }
 
-    return res.status(500).json({
+    return res.status(statusCode).json({
       success: false,
-      message: "Order creation failed",
+      message: errorMessage,
       code: "ORDER_FAILED",
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };

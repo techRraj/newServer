@@ -60,6 +60,12 @@ const userSchema = new mongoose.Schema({
   }
 });
 
-// Remove the duplicate index since we already have unique: true on the email field
-const userModel = mongoose.models.user || mongoose.model('user', userSchema);
-export default userModel;
+// Safe model registration
+let User;
+if (mongoose.models.User) {
+  User = mongoose.model('User');
+} else {
+  User = mongoose.model('User', userSchema);
+}
+
+export default User;
