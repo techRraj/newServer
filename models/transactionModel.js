@@ -9,8 +9,7 @@ const transactionSchema = new mongoose.Schema({
   orderId: {
     type: String,
     required: true,
-    unique: true,
-    index: true
+    unique: true
   },
   plan: {
     type: String,
@@ -26,19 +25,15 @@ const transactionSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['created', 'pending', 'completed', 'failed'],
-    default: 'created'
+    enum: ['pending', 'created', 'completed', 'failed'],
+    default: 'pending'
   },
   paymentId: String,
   signature: String,
-  receipt: String,
-  razorpayOrder: Object // Store complete Razorpay order details
+  razorpayOrder: Object
 }, {
   timestamps: true
 });
-
-// Compound index for faster queries
-transactionSchema.index({ orderId: 1, userId: 1 });
 
 const transactionModel = mongoose.models.transaction || 
   mongoose.model("transaction", transactionSchema);

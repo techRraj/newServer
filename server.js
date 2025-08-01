@@ -4,14 +4,11 @@ import dotenv from 'dotenv';
 import cors from 'cors';
 import helmet from 'helmet';
 import mongoSanitize from 'express-mongo-sanitize';
-import { rateLimit, ipKeyGenerator } from 'express-rate-limit';
+import { rateLimit } from 'express-rate-limit';
 import compression from 'compression';
 import cookieParser from 'cookie-parser';
 import userRoutes from './routes/userRoutes.js';
 import imageRoutes from './routes/imageRoutes.js';
-import { createRequire } from 'module';
-const require = createRequire(import.meta.url);
-const { RateLimitError } = require('express-rate-limit');
 
 // Load environment variables
 dotenv.config();
@@ -44,55 +41,28 @@ const corsOptions = {
   ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'token', 'x-requested-with']
+  allowedHeaders: ['Content-Type', 'Authorization', 'token']
 };
 
 // Trust proxy for proper IP handling
-app.set('trust proxy', true);
+app.set('trust proxy', 1);
 
 // ======================
 // SECURITY MIDDLEWARE
 // ======================
-app.use(helmet({
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "'unsafe-inline'", 'https://checkout.razorpay.com'],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      imgSrc: ["'self'", 'data:', 'https://*.razorpay.com'],
-      connectSrc: ["'self'", 'https://api.razorpay.com']
-    }
-  }
-}));
-
+app.use(helmet());
 app.use(mongoSanitize());
 app.use(cookieParser());
 
-// Middleware to properly extract client IP
-app.use((req, res, next) => {
-  const forwarded = req.headers['x-forwarded-for'];
-  req.clientIp = forwarded ? forwarded.split(/, /)[0] : req.ip;
-  next();
-});
-
-// Enhanced Rate Limiting with proper IPv6 support
+// Rate limiting - simplified version that works with Render
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 300,
-  standardHeaders: 'draft-7',
+  standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req) => ipKeyGenerator(req), // Using official ipKeyGenerator
-  skip: (req) => req.path.startsWith('/api/health'),
-  handler: (req, res, next, options) => {
-    res.status(options.statusCode).json({
-      success: false,
-      message: options.message,
-      code: "RATE_LIMIT_EXCEEDED",
-      retryAfter: options.windowMs / 1000
-    });
-  }
+  keyGenerator: (req) => req.ip, // Simplified IP handling for Render
+  skip: (req) => req.path.startsWith('/api/health')
 });
-
 app.use(limiter);
 
 // ======================
@@ -102,12 +72,12 @@ app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 app.use(compression());
 app.use(express.json({ limit: '10kb' }));
-app.use(express.urlencoded({ extended: true, limit: '10kb' }));
+app.use(express.urlencoded({ extended: true }));
 
 // Enhanced Request Logging
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`, {
-    clientIp: req.clientIp,
+    ip: req.ip,
     xForwardedFor: req.headers['x-forwarded-for'],
     userAgent: req.headers['user-agent']
   });
@@ -127,8 +97,7 @@ app.get('/', (req, res) => {
       healthCheck: '/api/health'
     },
     environment: NODE_ENV,
-    timestamp: new Date().toISOString(),
-    status: 'operational'
+    timestamp: new Date().toISOString()
   });
 });
 
@@ -136,18 +105,15 @@ app.get('/', (req, res) => {
 app.use('/api/user', userRoutes);
 app.use('/api/image', imageRoutes);
 
-// Enhanced Health Check
+// Health Check
 app.get('/api/health', (req, res) => {
-  const healthStatus = {
+  res.status(200).json({
     status: 'healthy',
     uptime: process.uptime(),
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     memory: process.memoryUsage(),
-    environment: NODE_ENV,
-    timestamp: new Date().toISOString(),
-    load: process.cpuUsage()
-  };
-  res.status(200).json(healthStatus);
+    environment: NODE_ENV
+  });
 });
 
 // ======================
@@ -164,45 +130,16 @@ app.use((req, res) => {
 
 // Global Error Handler
 app.use((err, req, res, next) => {
-  console.error(`[${new Date().toISOString()}] ERROR: ${err.stack}`);
-
-  if (err instanceof RateLimitError) {
-    return res.status(429).json({
-      success: false,
-      message: "Too many requests, please try again later",
-      code: "RATE_LIMIT_EXCEEDED"
-    });
-  }
-
-  if (err.name === 'ValidationError') {
-    return res.status(400).json({
-      success: false,
-      message: "Validation Error",
-      code: "VALIDATION_ERROR",
-      errors: Object.values(err.errors).map(e => e.message)
-    });
-  }
-
-  if (err.name === 'MongoServerError' && err.code === 11000) {
-    return res.status(400).json({
-      success: false,
-      message: "Duplicate key error",
-      code: "DUPLICATE_KEY",
-      field: Object.keys(err.keyPattern)[0]
-    });
-  }
+  console.error(`[ERROR] ${err.stack}`);
 
   const statusCode = err.statusCode || 500;
-  const message = statusCode === 500 ? 'Internal Server Error' : err.message;
+  const message = err.message || 'Internal Server Error';
 
   res.status(statusCode).json({
     success: false,
     message,
     code: err.code || "SERVER_ERROR",
-    ...(NODE_ENV === 'development' && { 
-      stack: err.stack,
-      details: err 
-    })
+    ...(NODE_ENV === 'development' && { stack: err.stack })
   });
 });
 
@@ -215,18 +152,7 @@ const connectDB = async () => {
       dbName: "ImageGen",
       serverSelectionTimeoutMS: 15000,
       socketTimeoutMS: 45000,
-      retryWrites: true,
-      retryReads: true
     });
-
-    mongoose.connection.on('error', err => {
-      console.error('MongoDB connection error:', err);
-    });
-
-    mongoose.connection.on('disconnected', () => {
-      console.warn('MongoDB disconnected');
-    });
-
     console.log('✅ MongoDB connected successfully');
   } catch (err) {
     console.error('❌ MongoDB connection failed:', err.message);
@@ -249,33 +175,18 @@ const startServer = async () => {
       `);
     });
 
-    // Enhanced graceful shutdown
-    const shutdown = async (signal) => {
-      console.log(`\n🛑 Received ${signal}, shutting down gracefully...`);
-      try {
-        await new Promise((resolve) => server.close(resolve));
+    // Graceful shutdown
+    const shutdown = async () => {
+      console.log('\n🛑 Shutting down gracefully...');
+      server.close(async () => {
         await mongoose.connection.close();
         console.log('✅ All connections closed');
         process.exit(0);
-      } catch (err) {
-        console.error('❌ Graceful shutdown failed:', err);
-        process.exit(1);
-      }
+      });
     };
 
-    process.on('SIGTERM', () => shutdown('SIGTERM'));
-    process.on('SIGINT', () => shutdown('SIGINT'));
-    
-    // Handle unhandled rejections
-    process.on('unhandledRejection', (reason, promise) => {
-      console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-    });
-    
-    // Handle uncaught exceptions
-    process.on('uncaughtException', (err) => {
-      console.error('Uncaught Exception:', err);
-      shutdown('uncaughtException');
-    });
+    process.on('SIGTERM', shutdown);
+    process.on('SIGINT', shutdown);
     
   } catch (error) {
     console.error('❌ Server startup failed:', error);

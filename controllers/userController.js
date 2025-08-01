@@ -438,14 +438,14 @@ export const createOrder = async (req, res) => {
       });
     }
 
-    // Define plans
-    const PLANS = {
+    // Define available plans
+    const availablePlans = {
       basic: { name: "Basic", credits: 25, amount: 1000 },
       standard: { name: "Standard", credits: 70, amount: 3000 },
       premium: { name: "Premium", credits: 150, amount: 5000 }
     };
 
-    const selectedPlan = PLANS[planId];
+    const selectedPlan = availablePlans[planId];
     if (!selectedPlan) {
       return res.status(400).json({
         success: false,
@@ -454,18 +454,19 @@ export const createOrder = async (req, res) => {
       });
     }
 
-    // Create transaction first (with pending status)
-    const transaction = await transactionModel.create({
+    // Create transaction record first
+    const transaction = new transactionModel({
       userId,
       plan: selectedPlan.name,
       amount: selectedPlan.amount,
       credits: selectedPlan.credits,
       status: 'pending'
     });
+    await transaction.save();
 
     // Create Razorpay order
     const orderOptions = {
-      amount: selectedPlan.amount * 100, // in paise
+      amount: selectedPlan.amount * 100, // Convert to paise
       currency: "INR",
       receipt: `txn_${transaction._id}`,
       payment_capture: 1,
@@ -477,40 +478,45 @@ export const createOrder = async (req, res) => {
       }
     };
 
-    const razorpayOrder = await razorpayInstance.orders.create(orderOptions);
+    const order = await razorpayInstance.orders.create(orderOptions);
 
-    // Update transaction with Razorpay details
-    transaction.orderId = razorpayOrder.id;
-    transaction.razorpayOrder = razorpayOrder;
+    // Update transaction with Razorpay order ID
+    transaction.orderId = order.id;
     transaction.status = 'created';
     await transaction.save();
-
-    // Update user's transactions array
-    await userModel.findByIdAndUpdate(userId, {
-      $push: { transactions: transaction._id }
-    });
 
     return res.status(200).json({
       success: true,
       order: {
-        ...razorpayOrder,
-        amount: razorpayOrder.amount / 100 // convert to rupees
+        id: order.id,
+        amount: order.amount / 100, // Convert back to rupees
+        currency: order.currency,
+        receipt: order.receipt
       },
-      transactionId: transaction._id
+      plan: selectedPlan
     });
 
   } catch (error) {
     console.error('Order Creation Error:', error);
     
-    // Handle duplicate key errors
-    if (error.code === 11000) {
+    // Handle Razorpay-specific errors
+    if (error.error?.description) {
       return res.status(400).json({
         success: false,
-        message: "Transaction already exists",
+        message: `Payment gateway error: ${error.error.description}`,
+        code: "RAZORPAY_ERROR"
+      });
+    }
+
+    // Handle database errors
+    if (error.name === 'MongoError' && error.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        message: "Duplicate transaction detected",
         code: "DUPLICATE_TRANSACTION"
       });
     }
-    
+
     return res.status(500).json({
       success: false,
       message: "Order creation failed",
