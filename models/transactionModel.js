@@ -23,5 +23,8 @@ const transactionSchema = new mongoose.Schema({
     date :{type: Number},
 })
 
+// Add to your transaction model
+transactionSchema.index({ orderId: 1 }, { unique: true });
+
 const transactionModel = mongoose.models.transaction || mongoose.model("transaction", transactionSchema);
 export default transactionModel;

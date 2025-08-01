@@ -30,6 +30,16 @@ const corsOptions = {
   allowedHeaders: ['Content-Type', 'Authorization', 'token']
 };
 
+if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
+  console.error('❌ Razorpay keys missing in environment variables!');
+  console.error('Please set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET');
+  process.exit(1);
+}
+
+
+// Add this near the top of your server.js, after app initialization
+app.set('trust proxy', 1); // Enable trust for proxy headers
+
 // ======================
 // SECURITY MIDDLEWARE
 // ======================

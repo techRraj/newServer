@@ -455,7 +455,7 @@ export const createOrder = async (req, res) => {
 
     // Create transaction record FIRST
     const transaction = new transactionModel({
-      userId,
+      userId: req.user.id,
       plan: selectedPlan.name,
       amount: selectedPlan.amount,
       credits: selectedPlan.credits,
@@ -521,11 +521,7 @@ export const verifyPayment = async (req, res) => {
       .update(`${razorpay_order_id}|${razorpay_payment_id}`)
       .digest('hex');
 
-    if (generatedSignature !== razorpay_signature) {
-      console.error('Signature verification failed', {
-        received: razorpay_signature,
-        generated: generatedSignature
-      });
+     if (generatedSignature !== razorpay_signature) {
       return res.status(400).json({ 
         success: false, 
         message: "Invalid payment signature",
@@ -536,7 +532,10 @@ export const verifyPayment = async (req, res) => {
     // Find transaction
     const transaction = await transactionModel.findOne({ orderId: razorpay_order_id });
     if (!transaction) {
-      console.error('Transaction not found for order:', razorpay_order_id);
+      console.error('Transaction not found for order:', {
+        razorpay_order_id,
+        existingTransactions: await transactionModel.find({}).select('orderId')
+      });
       return res.status(404).json({ 
         success: false, 
         message: "Transaction not found",
@@ -544,7 +543,6 @@ export const verifyPayment = async (req, res) => {
         debug: { razorpay_order_id }
       });
     }
-
     if (transaction.status === 'completed') {
       return res.status(400).json({ 
         success: false, 
