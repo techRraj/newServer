@@ -439,13 +439,13 @@ export const createOrder = async (req, res) => {
     }
 
     // Define available plans
-    const availablePlans = {
+    const PLANS = {
       basic: { name: "Basic", credits: 25, amount: 1000 },
       standard: { name: "Standard", credits: 70, amount: 3000 },
       premium: { name: "Premium", credits: 150, amount: 5000 }
     };
 
-    const selectedPlan = availablePlans[planId];
+    const selectedPlan = PLANS[planId];
     if (!selectedPlan) {
       return res.status(400).json({
         success: false,
@@ -466,7 +466,7 @@ export const createOrder = async (req, res) => {
 
     // Create Razorpay order
     const orderOptions = {
-      amount: selectedPlan.amount * 100, // Convert to paise
+      amount: selectedPlan.amount * 100, // in paise
       currency: "INR",
       receipt: `txn_${transaction._id}`,
       payment_capture: 1,
@@ -478,22 +478,24 @@ export const createOrder = async (req, res) => {
       }
     };
 
-    const order = await razorpayInstance.orders.create(orderOptions);
+    console.log('Creating Razorpay order with options:', orderOptions);
+    const razorpayOrder = await razorpayInstance.orders.create(orderOptions);
 
-    // Update transaction with Razorpay order ID
-    transaction.orderId = order.id;
+    // Update transaction with Razorpay details
+    transaction.orderId = razorpayOrder.id;
+    transaction.razorpayOrder = razorpayOrder;
     transaction.status = 'created';
     await transaction.save();
 
     return res.status(200).json({
       success: true,
       order: {
-        id: order.id,
-        amount: order.amount / 100, // Convert back to rupees
-        currency: order.currency,
-        receipt: order.receipt
+        id: razorpayOrder.id,
+        amount: razorpayOrder.amount / 100, // convert to rupees
+        currency: razorpayOrder.currency,
+        receipt: razorpayOrder.receipt
       },
-      plan: selectedPlan
+      transactionId: transaction._id
     });
 
   } catch (error) {
@@ -504,10 +506,11 @@ export const createOrder = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: `Payment gateway error: ${error.error.description}`,
-        code: "RAZORPAY_ERROR"
+        code: "RAZORPAY_ERROR",
+        details: process.env.NODE_ENV === 'development' ? error : undefined
       });
     }
-
+    
     // Handle database errors
     if (error.name === 'MongoError' && error.code === 11000) {
       return res.status(400).json({
@@ -521,7 +524,8 @@ export const createOrder = async (req, res) => {
       success: false,
       message: "Order creation failed",
       code: "ORDER_FAILED",
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 };

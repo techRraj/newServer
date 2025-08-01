@@ -34,7 +34,8 @@ const transactionSchema = new mongoose.Schema({
 }, {
   timestamps: true
 });
-
+// Ensure this is in your transaction model
+transactionSchema.index({ orderId: 1 }, { unique: true });
 const transactionModel = mongoose.models.transaction || 
   mongoose.model("transaction", transactionSchema);
 
