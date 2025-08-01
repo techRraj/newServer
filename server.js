@@ -48,15 +48,17 @@ app.use(mongoSanitize()); // Prevent NoSQL injection
 app.use(cookieParser()); // Parse cookies
 
 // Rate limiting
+// Replace your existing limiter with this enhanced version
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 300, // Limit each IP to 300 requests per window
+  max: 300,
   standardHeaders: true,
   legacyHeaders: false,
-   skip: (req) => {
-    // Skip rate limiting for certain paths if needed
-    return req.path.startsWith('/api/health');
-  }
+  keyGenerator: (req) => {
+    // Use the x-forwarded-for header if behind a proxy
+    return req.headers['x-forwarded-for'] || req.ip;
+  },
+  skip: (req) => req.path.startsWith('/api/health')
 });
 app.use(limiter);
 
