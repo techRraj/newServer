@@ -4,7 +4,7 @@ import dotenv from 'dotenv';
 import cors from 'cors';
 import helmet from 'helmet';
 import mongoSanitize from 'express-mongo-sanitize';
-import { rateLimit } from 'express-rate-limit';
+import { rateLimit, ipKeyGenerator } from 'express-rate-limit';
 import compression from 'compression';
 import cookieParser from 'cookie-parser';
 import userRoutes from './routes/userRoutes.js';
@@ -47,7 +47,7 @@ const corsOptions = {
   allowedHeaders: ['Content-Type', 'Authorization', 'token', 'x-requested-with']
 };
 
-// Trust proxy for rate limiting
+// Trust proxy for proper IP handling
 app.set('trust proxy', true);
 
 // ======================
@@ -68,24 +68,29 @@ app.use(helmet({
 app.use(mongoSanitize());
 app.use(cookieParser());
 
-// Enhanced Rate Limiting
+// Middleware to properly extract client IP
+app.use((req, res, next) => {
+  const forwarded = req.headers['x-forwarded-for'];
+  req.clientIp = forwarded ? forwarded.split(/, /)[0] : req.ip;
+  next();
+});
+
+// Enhanced Rate Limiting with proper IPv6 support
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
+  windowMs: 15 * 60 * 1000, // 15 minutes
   max: 300,
   standardHeaders: 'draft-7',
   legacyHeaders: false,
-  keyGenerator: (req) => {
-    const forwarded = req.headers['x-forwarded-for'];
-    return forwarded ? forwarded.split(/, /)[0] : req.ip;
-  },
+  keyGenerator: (req) => ipKeyGenerator(req), // Using official ipKeyGenerator
+  skip: (req) => req.path.startsWith('/api/health'),
   handler: (req, res, next, options) => {
     res.status(options.statusCode).json({
       success: false,
       message: options.message,
-      code: "RATE_LIMIT_EXCEEDED"
+      code: "RATE_LIMIT_EXCEEDED",
+      retryAfter: options.windowMs / 1000
     });
-  },
-  skip: (req) => req.path.startsWith('/api/health')
+  }
 });
 
 app.use(limiter);
@@ -102,7 +107,7 @@ app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 // Enhanced Request Logging
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`, {
-    ip: req.ip,
+    clientIp: req.clientIp,
     xForwardedFor: req.headers['x-forwarded-for'],
     userAgent: req.headers['user-agent']
   });
