@@ -535,7 +535,10 @@ export const createOrder = async (req, res) => {
 // Update the verifyPayment function completely:
 export const verifyPayment = async (req, res) => {
   try {
-    if (!req.user?.id) {
+    // First get token from headers or cookies
+    const token = req.headers.authorization?.split(' ')[1] || req.cookies?.token;
+    
+    if (!token) {
       return res.status(401).json({
         success: false,
         message: "Authentication required",
@@ -543,8 +546,13 @@ export const verifyPayment = async (req, res) => {
       });
     }
 
+    // Verify token and get decoded user
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      const userId = decoded.id; // Use this instead of req.user.id
+      
     const { razorpay_payment_id, razorpay_order_id, razorpay_signature } = req.body;
 
+    // Validate payment data
     if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature) {
       return res.status(400).json({
         success: false,
@@ -553,7 +561,7 @@ export const verifyPayment = async (req, res) => {
       });
     }
 
-    // Signature verification
+    // Verify signature
     const generatedSignature = crypto
       .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
       .update(`${razorpay_order_id}|${razorpay_payment_id}`)
@@ -567,9 +575,13 @@ export const verifyPayment = async (req, res) => {
       });
     }
 
-    // Find and update transaction
+    // Find and update transaction atomically
     const transaction = await Transaction.findOneAndUpdate(
-      { orderId: razorpay_order_id, status: 'created' },
+      { 
+        orderId: razorpay_order_id, 
+        status: 'created',
+        userId: decoded.id // Ensure transaction belongs to this user
+      },
       { 
         $set: { 
           status: 'completed',
@@ -584,20 +596,20 @@ export const verifyPayment = async (req, res) => {
     if (!transaction) {
       return res.status(404).json({ 
         success: false, 
-        message: "Transaction not found or already processed",
+        message: "Transaction not found, already processed, or doesn't belong to user",
         code: "TRANSACTION_NOT_FOUND"
       });
     }
 
-    // Update user credits
+    // Update user credits atomically
     const user = await userModel.findByIdAndUpdate(
-      transaction.userId,
+      decoded.id,
       { $inc: { creditBalance: transaction.credits } },
       { new: true }
     ).select('-password -__v');
 
     if (!user) {
-      // Rollback transaction status if user not found
+      // Rollback transaction if user not found
       await Transaction.findByIdAndUpdate(transaction._id, {
         status: 'failed',
         error: 'User not found'
@@ -623,6 +635,23 @@ export const verifyPayment = async (req, res) => {
 
   } catch (error) {
     console.error("Payment Verification Error:", error);
+    
+    // Handle specific error cases
+    if (error.name === 'JsonWebTokenError') {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid token",
+        code: "INVALID_TOKEN"
+      });
+    }
+    
+    if (error.name === 'TokenExpiredError') {
+      return res.status(401).json({
+        success: false,
+        message: "Token expired",
+        code: "TOKEN_EXPIRED"
+      });
+    }
     
     if (error.message.includes('duplicate key')) {
       return res.status(400).json({
@@ -690,18 +719,59 @@ export const getUserCredits = async (req, res) => {
 
 // Add to your userController.js
 export const handleWebhook = async (req, res) => {
+  // Skip verification in development if no secret is set
+  if (process.env.NODE_ENV !== 'production' && !process.env.RAZORPAY_WEBHOOK_SECRET) {
+    console.warn('⚠️ Webhook verification skipped in development');
+    // Process webhook without verification
+    return processWebhook(req, res);
+  }
+
+  // Proper verification in production
   const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
   const webhookSignature = req.headers['x-razorpay-signature'];
   
+  if (!webhookSecret) {
+    console.error('❌ RAZORPAY_WEBHOOK_SECRET not configured');
+    return res.status(500).json({ success: false });
+  }
+
   const isValid = crypto
     .createHmac('sha256', webhookSecret)
     .update(JSON.stringify(req.body))
     .digest('hex');
 
   if (isValid !== webhookSignature) {
+    console.error('❌ Invalid webhook signature');
     return res.status(400).json({ success: false });
   }
 
-  // Process webhook events
-  // ...
+  // Process verified webhook
+  return processWebhook(req, res);
 };
+
+// Separate function to handle the actual webhook processing
+async function processWebhook(req, res) {
+  try {
+    const event = req.body.event;
+    const paymentId = req.body.payload.payment?.entity?.id;
+    
+    console.log(`Webhook received: ${event} for payment ${paymentId}`);
+
+    // Handle different webhook events
+    switch (event) {
+      case 'payment.captured':
+        // Handle successful payment
+        break;
+      case 'payment.failed':
+        // Handle failed payment
+        break;
+      default:
+        console.log(`Unhandled event type: ${event}`);
+    }
+
+    res.status(200).json({ success: true });
+  } catch (error) {
+    console.error('Webhook processing error:', error);
+    res.status(500).json({ success: false });
+  }
+}

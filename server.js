@@ -59,6 +59,7 @@ if (NODE_ENV === 'development') {
 }
 
 // Robust CORS configuration
+
 const corsOptions = {
   origin: (origin, callback) => {
     const allowedOrigins = [
@@ -79,6 +80,9 @@ const corsOptions = {
   allowedHeaders: ['Content-Type', 'Authorization', 'token'],
   maxAge: 86400
 };
+
+// Add explicit OPTIONS handler
+app.options('*', cors(corsOptions));
 
 // Trust proxy with proper IP handling
 app.set('trust proxy', 1);
