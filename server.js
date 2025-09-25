@@ -63,7 +63,8 @@ if (NODE_ENV === 'development') {
 const corsOptions = {
   origin: (origin, callback) => {
     const allowedOrigins = [
-      'https://tech-rraj-client-repo-xwx8.vercel.app',
+      'https://deep-ai-raj.vercel.app',
+      
       'http://localhost:3000',
       ...(NODE_ENV === 'development' ? ['http://localhost:5000'] : [])
     ];
@@ -398,7 +399,7 @@ const startServer = async () => {
        🔗 http://localhost:${PORT}
        ⏰ ${new Date().toLocaleString()}
        ✅ Allowed Origins: ${[
-         'https://tech-rraj-client-repo-xwx8.vercel.app',
+         'https://deep-ai-raj.vercel.app',
          'http://localhost:3000',
          ...(NODE_ENV === 'development' ? ['http://localhost:5000'] : [])
        ].join(', ')}
